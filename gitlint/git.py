@@ -207,7 +207,9 @@ class LocalGitCommit(GitCommit, PropertyCache):
         """ Does a call to `git log` to determine a bunch of information about the commit. """
         long_format = "--pretty=%aN%x00%aE%x00%ai%x00%P%n%B"
         raw_commit = _git("log", self.sha, "-1", long_format, _cwd=self.context.repository_path).split("\n")
+        self._update_from_raw_commit(raw_commit)
 
+    def _update_from_raw_commit(self, raw_commit):
         (name, email, date, parents), commit_msg = raw_commit[0].split('\x00'), "\n".join(raw_commit[1:])
 
         commit_parents = parents.split(" ")
@@ -376,13 +378,26 @@ class GitContext(PropertyCache):
             # We tried many things here e.g.: defaulting to e.g. HEAD or HEAD^... (incl. dealing with
             # repos that only have a single commit - HEAD^... doesn't work there), but then we still get into
             # problems with e.g. merge commits. Easiest solution is just taking the SHA from `git log -1`.
-            sha_list = [_git("log", "-1", "--pretty=%H", _cwd=repository_path).replace(u"\n", u"")]
+            sha = _git("log", "-1", "--pretty=%H", _cwd=repository_path).replace(u"\n", u"")
+            context.commits.append(LocalGitCommit(context, sha))
         else:
-            sha_list = _git("rev-list", refspec, _cwd=repository_path).split()
+            # The format separates commit messages by "\x00\x00" and fields within each commit by "\x00".
+            rev_output = _git(
+                "rev-list", refspec, "--pretty=%x00%aN%x00%aE%x00%ai%x00%P%n%B%x00%x00", _cwd=repository_path
+            )
+            # Throw away a trailing "\x00\x00\n" to simplify the rest of the logic.
+            rev_output = rev_output.rstrip(u"\n").rstrip(u"\x00")
 
-        for sha in sha_list:
-            commit = LocalGitCommit(context, sha)
-            context.commits.append(commit)
+            for chunk in rev_output.split(u"\x00\x00"):
+                # `git rev-list` always starts each commit with "commit <sha>\n", no matter what the given format is. We
+                # also ask for "\x00" as a separator, and the remainder of the chunk is the same format that
+                # LocalGitCommit._log uses.
+                sha_line, rest = chunk.split(u"\x00", 1)
+                sha = sha_line.split()[1]
+
+                commit = LocalGitCommit(context, sha)
+                commit._update_from_raw_commit(rest.split(u"\n"))
+                context.commits.append(commit)
 
         return context
 

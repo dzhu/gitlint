@@ -70,7 +70,12 @@ class GitLinter(object):
     def lint(self, commit):
         """ Lint the last commit in a given git context by applying all ignore, title, body and commit rules. """
         LOG.debug("Linting commit %s", commit.sha or "[SHA UNKNOWN]")
-        LOG.debug("Commit Object\n" + ustr(commit))
+
+        # Calling `ustr` on a commit can cause several Git subprocesses to be executed, leading to a massive slowdown
+        # when processing many commits, even if debug mode is disabled. So this message is skipped entirely when it
+        # wouldn't appear anyway.
+        if self.config.debug:
+            LOG.debug("Commit Object\n" + ustr(commit))
 
         # Apply config rules
         for rule in self.configuration_rules:
